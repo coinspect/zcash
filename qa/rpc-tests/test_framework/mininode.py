@@ -36,6 +36,22 @@ MY_VERSION = 60001  # past bip-31 for ping/pong
 MY_SUBVERSION = "/python-mininode-tester:0.0.1/"
 
 MAX_INV_SZ = 50000
+#defined in zcash/Zcash.h
+ZKSNARK_PROOF_SIZE = 584
+ZC_NUM_JS_OUTPUTS = 2
+ZC_NOTEPLAINTEXT_LEADING = 1
+ZC_V_SIZE = 8
+ZC_RHO_SIZE = 32
+ZC_R_SIZE = 32
+ZC_MEMO_SIZE = 512
+
+ZC_NOTEPLAINTEXT_SIZE = ZC_NOTEPLAINTEXT_LEADING + ZC_V_SIZE + ZC_RHO_SIZE + ZC_R_SIZE + ZC_MEMO_SIZE
+
+#defined in zcash/NoteEncryption.hpp
+NOTEENCRYPTION_AUTH_BYTES = 16
+MLEN = ZC_NOTEPLAINTEXT_SIZE
+#CLEN = 601
+CLEN = MLEN + NOTEENCRYPTION_AUTH_BYTES
 
 # Keep our own socket map for asyncore, so that we can track disconnects
 # ourselves (to workaround an issue with closing an asyncore socket when 
@@ -371,6 +387,144 @@ class CTxOut(object):
             % (self.nValue // 100000000, self.nValue % 100000000,
                binascii.hexlify(self.scriptPubKey))
 
+class JSDescription(object):
+    def __init__(self, description=None):
+        self.vpub_old = 0
+        self.vpub_new = 0
+        self.proof = ZCProof()
+        self.nullifiers = []
+        self.commitments = []
+        self.macs = []
+        self.ciphertexts = []
+
+    def deserialize(self, f):
+        self.vpub_old = struct.unpack("<q", f.read(8))[0]
+        self.vpub_new = struct.unpack("<q", f.read(8))[0]
+        self.anchor = deser_uint256(f)
+        self.nullifiers.append(deser_uint256(f))
+        self.nullifiers.append(deser_uint256(f))
+        self.commitments.append(deser_uint256(f))
+        self.commitments.append(deser_uint256(f))
+        self.ephemeralKey = deser_uint256(f)
+        self.randomSeed = deser_uint256(f)
+        self.macs.append(deser_uint256(f))
+        self.macs.append(deser_uint256(f))
+        self.proof.deserialize(f)
+        for ci in xrange(ZC_NUM_JS_OUTPUTS):
+            self.ciphertexts.append(NoteCiphertext())
+            self.ciphertexts[ci].deserialize(f)
+
+    def serialize(self):
+        r = ""
+        r += struct.pack("<q", self.vpub_old)
+        r += struct.pack("<q", self.vpub_new)
+        r += ser_uint256(self.anchor)
+        for nullifier in self.nullifiers:
+            r += ser_uint256(nullifier)
+        for commitment in self.commitments:
+            r += ser_uint256(commitment)
+        r += ser_uint256(self.ephemeralKey)
+        r += ser_uint256(self.randomSeed)
+        for mac in self.macs:
+            r += ser_uint256(mac)
+        r += self.proof.serialize()
+        for ciphertext in self.ciphertexts:
+            r += ciphertext.serialize()
+        return r
+
+    def __repr__(self):
+        return "JSDescription (vpub_old=%i.%08i  vpup_new=%i.%08i  anchor=%064x nullifiers=[%064x, %064x] commitments=[%064x, %064x] macs=[%064x, %064x] )" % (self.vpub_old // 100000000, self.vpub_old % 100000000, self.vpub_new // 100000000, self.vpub_new % 100000000, self.anchor, self.nullifiers[0], self.nullifiers[1], self.commitments[0], self.commitments[1], self.macs[0], self.macs[1])
+
+class NoteCiphertext(object):
+    def __init__(self, ciphertext=""):
+        self.ciphertext = ciphertext
+
+    def deserialize(self, f):
+        self.ciphertext = f.read(CLEN)
+
+    def serialize(self):
+        r = self.ciphertext[:CLEN]
+        return r
+
+class ZCProof(object):
+    def __init__(self, proof=""):
+        self.proof = proof
+
+    def deserialize(self, f):
+        self.proof = f.read(ZKSNARK_PROOF_SIZE)
+
+    def serialize(self):
+        r = self.proof[:ZKSNARK_PROOF_SIZE]
+        return r
+
+class ZCProofZ8(object):
+    def __init__(self):
+        self.g_A = CompressedG1()
+        self.g_A_prime = CompressedG1()
+        self.g_B = CompressedG2()
+        self.g_B_prime = CompressedG1()
+        self.g_C = CompressedG1()
+        self.g_C_prime = CompressedG1()
+        self.g_K = CompressedG1()
+        self.g_H = CompressedG1()
+
+    def deserialize(self, f):
+        self.g_A.deserialize(f)
+        self.g_A_prime.deserialize(f)
+        self.g_B.deserialize(f)
+        self.g_B_prime.deserialize(f)
+        self.g_C.deserialize(f)
+        self.g_C_prime.deserialize(f)
+        self.g_K .deserialize(f)
+        self.g_H.deserialize(f)
+
+    def serialize(self):
+        r = ""
+        r += self.g_A.serialize()
+        r += self.g_A_prime.serialize()
+        r += self.g_B.serialize()
+        r += self.g_B_prime.serialize()
+        r += self.g_C.serialize()
+        r += self.g_C_prime.serialize()
+        r += self.g_K.serialize()
+        r += self.g_H.serialize()
+        return r
+
+class CompressedG1(object):
+    def __init__(self, y_lsb=False, data=""):
+        self.y_lsb = y_lsb
+        self.data = data
+
+    def deserialize(self, f):
+        self.leadingByte = ord(f.read(1))
+        self.data = f.read(32)
+        self.y_lsb = self.leadingByte & 1
+
+    def serialize(self):
+        self.leadingByte = 0x02
+        if self.y_lsb == True:
+            self.leadingByte |= 1
+        r = chr(self.leadingByte)
+        r += self.data
+        return r
+
+class CompressedG2(object):
+    def __init__(self, y_gt=False, data=""):
+        self.y_gt = y_gt
+        self.data = data
+
+    def deserialize(self, f):
+        self.leadingByte = ord(f.read(1))
+        self.data = f.read(64)
+        self.y_gt = self.leadingByte & 1
+
+    def serialize(self):
+        self.leadingByte = 0x0a
+        if self.y_gt == True:
+            self.leadingByte |= 1
+        r = chr(self.leadingByte)
+        r += self.data
+        return r
 
 class CTransaction(object):
     def __init__(self, tx=None):
@@ -379,6 +533,8 @@ class CTransaction(object):
             self.vin = []
             self.vout = []
             self.nLockTime = 0
+            self.vjoinsplit = []
+            self.joinSplitPubKey = 0
             self.sha256 = None
             self.hash = None
         else:
@@ -394,6 +550,11 @@ class CTransaction(object):
         self.vin = deser_vector(f, CTxIn)
         self.vout = deser_vector(f, CTxOut)
         self.nLockTime = struct.unpack("<I", f.read(4))[0]
+        if self.nVersion >= 2:
+            self.vjoinsplit = deser_vector(f, JSDescription)
+            if len(self.vjoinsplit) > 0:
+                self.joinSplitPubKey = deser_uint256(f)
+                self.joinSplitSig = f.read(64)
         self.sha256 = None
         self.hash = None
 
@@ -403,6 +564,10 @@ class CTransaction(object):
         r += ser_vector(self.vin)
         r += ser_vector(self.vout)
         r += struct.pack("<I", self.nLockTime)
+        r += ser_vector(self.vjoinsplit)
+        if len(self.vjoinsplit) > 0:
+            r += ser_uint256(self.joinSplitPubKey)
+            r += self.joinSplitSig[:64]
         return r
 
     def rehash(self):
@@ -422,9 +587,12 @@ class CTransaction(object):
         return True
 
     def __repr__(self):
-        return "CTransaction(nVersion=%i vin=%s vout=%s nLockTime=%i)" \
+        if self.nVersion >= 2:
+            return "CTransaction(nVersion=%i vin=%s vout=%s nLockTime=%i, joinSplitPubKey=%064x, vjoinsplit=%s)" \
+            % (self.nVersion, repr(self.vin), repr(self.vout), self.nLockTime, self.joinSplitPubKey, self.vjoinsplit)
+        else:
+             return "CTransaction(nVersion=%i vin=%s vout=%s nLockTime=%i)" \
             % (self.nVersion, repr(self.vin), repr(self.vout), self.nLockTime)
-
 
 class CBlockHeader(object):
     def __init__(self, header=None):
@@ -434,20 +602,24 @@ class CBlockHeader(object):
             self.nVersion = header.nVersion
             self.hashPrevBlock = header.hashPrevBlock
             self.hashMerkleRoot = header.hashMerkleRoot
+            self.hashReserved = header.hashReserved
             self.nTime = header.nTime
             self.nBits = header.nBits
             self.nNonce = header.nNonce
+            self.nSolution = header.nSolution
             self.sha256 = header.sha256
             self.hash = header.hash
             self.calc_sha256()
 
     def set_null(self):
-        self.nVersion = 1
+        self.nVersion = 4
         self.hashPrevBlock = 0
         self.hashMerkleRoot = 0
+        self.hashReserved = 0
         self.nTime = 0
         self.nBits = 0
         self.nNonce = 0
+        self.nSolution = []
         self.sha256 = None
         self.hash = None
 
@@ -455,9 +627,11 @@ class CBlockHeader(object):
         self.nVersion = struct.unpack("<i", f.read(4))[0]
         self.hashPrevBlock = deser_uint256(f)
         self.hashMerkleRoot = deser_uint256(f)
+        self.hashReserved = deser_uint256(f)
         self.nTime = struct.unpack("<I", f.read(4))[0]
         self.nBits = struct.unpack("<I", f.read(4))[0]
-        self.nNonce = struct.unpack("<I", f.read(4))[0]
+        self.nNonce = deser_uint256(f)
+        self.nSolution = deser_int_vector(f)
         self.sha256 = None
         self.hash = None
 
@@ -466,9 +640,11 @@ class CBlockHeader(object):
         r += struct.pack("<i", self.nVersion)
         r += ser_uint256(self.hashPrevBlock)
         r += ser_uint256(self.hashMerkleRoot)
+        r += ser_uint256(self.hashReserved)
         r += struct.pack("<I", self.nTime)
         r += struct.pack("<I", self.nBits)
-        r += struct.pack("<I", self.nNonce)
+        r += ser_uint256(self.nNonce)
+        r += ser_int_vector(self.nSolution)
         return r
 
     def calc_sha256(self):
@@ -477,9 +653,11 @@ class CBlockHeader(object):
             r += struct.pack("<i", self.nVersion)
             r += ser_uint256(self.hashPrevBlock)
             r += ser_uint256(self.hashMerkleRoot)
+            r += ser_uint256(self.hashReserved)
             r += struct.pack("<I", self.nTime)
             r += struct.pack("<I", self.nBits)
-            r += struct.pack("<I", self.nNonce)
+            r += ser_uint256(self.nNonce)
+            r += ser_int_vector(self.nSolution)
             self.sha256 = uint256_from_str(hash256(r))
             self.hash = hash256(r)[::-1].encode('hex_codec')
 
@@ -489,9 +667,10 @@ class CBlockHeader(object):
         return self.sha256
 
     def __repr__(self):
-        return "CBlockHeader(nVersion=%i hashPrevBlock=%064x hashMerkleRoot=%064x nTime=%s nBits=%08x nNonce=%08x)" \
-            % (self.nVersion, self.hashPrevBlock, self.hashMerkleRoot,
-               time.ctime(self.nTime), self.nBits, self.nNonce)
+        return "CBlockHeader(nVersion=%i hashPrevBlock=%064x hashMerkleRoot=%064x hashReserved=%064x nTime=%s nBits=%08x nNonce=%064x)" \
+            % (self.nVersion, self.hashPrevBlock, self.hashMerkleRoot, 
+               self.hashReserved, time.ctime(self.nTime), self.nBits, 
+               self.nNonce)
 
 
 class CBlock(CBlockHeader):
@@ -542,9 +721,9 @@ class CBlock(CBlockHeader):
             self.rehash()
 
     def __repr__(self):
-        return "CBlock(nVersion=%i hashPrevBlock=%064x hashMerkleRoot=%064x nTime=%s nBits=%08x nNonce=%08x vtx=%s)" \
+        return "CBlock(nVersion=%i hashPrevBlock=%064x hashMerkleRoot=%064x hashReserved=%064x nTime=%s nBits=%08x nNonce=%064x vtx=%s)" \
             % (self.nVersion, self.hashPrevBlock, self.hashMerkleRoot,
-               time.ctime(self.nTime), self.nBits, self.nNonce, repr(self.vtx))
+               self.hashReserved, time.ctime(self.nTime), self.nBits, self.nNonce, repr(self.vtx))
 
 
 class CUnsignedAlert(object):
