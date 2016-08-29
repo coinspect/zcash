@@ -32,8 +32,8 @@ import logging
 import copy
 
 BIP0031_VERSION = 60000
-MY_VERSION = 60001  # past bip-31 for ping/pong
-MY_SUBVERSION = "/python-mininode-tester:0.0.1/"
+MY_VERSION = 170002  # past bip-31 for ping/pong
+MY_SUBVERSION = "/python-zcash-tester:0.0.1/"
 
 MAX_INV_SZ = 50000
 #defined in zcash/Zcash.h
@@ -446,7 +446,7 @@ class NoteCiphertext(object):
         r = self.ciphertext[:CLEN]
         return r
 
-class ZCProof(object):
+class ZCProofZ8(object):
     def __init__(self, proof=""):
         self.proof = proof
 
@@ -457,7 +457,7 @@ class ZCProof(object):
         r = self.proof[:ZKSNARK_PROOF_SIZE]
         return r
 
-class ZCProofZ8(object):
+class ZCProof(object):
     def __init__(self):
         self.g_A = CompressedG1()
         self.g_A_prime = CompressedG1()
@@ -1258,10 +1258,11 @@ class NodeConn(asyncore.dispatcher):
         "mempool": msg_mempool
     }
     MAGIC_BYTES = {
-        "mainnet": "\xf9\xbe\xb4\xd9",   # mainnet
-        "testnet3": "\x0b\x11\x09\x07",  # testnet3
-        "regtest": "\xfa\xbf\xb5\xda"    # regtest
+        "mainnet": "\x9f\xee\x4e\xd8",   # mainnet
+        "testnet3":"\x26\xa7\x24\xb6",  # testnet3
+        "regtest": "\xaa\xe8\x3f\x5f"    # regtest
     }
+
 
     def __init__(self, dstaddr, dstport, rpc, callback, net="regtest"):
         asyncore.dispatcher.__init__(self, map=mininode_socket_map)
